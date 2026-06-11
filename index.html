@@ -1,0 +1,614 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Confessions Generator</title>
+
+  <link href="https://fonts.googleapis.com/css2?family=Arimo:wght@700&display=swap" rel="stylesheet">
+
+  <style>
+    * { box-sizing: border-box; }
+
+    :root {
+      --font: "Arimo", Helvetica, Arial, sans-serif;
+      --pink: #ff38dd;
+      --red: #ff0000;
+      --black: #000;
+    }
+
+    body {
+      margin: 0;
+      background: var(--black);
+      font-family: var(--font);
+    }
+
+    .site {
+      width: min(92vw, 1280px);
+      margin: 0 auto;
+      padding: 18px 0 28px;
+    }
+
+    .header {
+      width: 100%;
+      margin-bottom: 18px;
+      background: var(--pink);
+      overflow: hidden;
+    }
+
+    .header img {
+      width: 100%;
+      display: block;
+    }
+
+    canvas {
+      width: 100%;
+      aspect-ratio: 16 / 9;
+      display: block;
+      background: var(--pink);
+      cursor: grab;
+    }
+
+    canvas:active { cursor: grabbing; }
+
+    .controls {
+      width: 100%;
+      margin-top: 16px;
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) 300px 170px;
+      gap: 18px;
+    }
+
+    .text-input,
+    .file-label,
+    button {
+      height: 72px;
+      background: var(--pink);
+      border: 8px solid var(--red);
+      color: #000;
+      font-family: var(--font);
+      font-size: 24px;
+      font-weight: 700;
+      text-align: center;
+      border-radius: 0;
+    }
+
+    .text-input {
+      min-width: 0;
+      padding: 0 20px;
+      text-transform: uppercase;
+    }
+
+    .file-label,
+    button {
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      cursor: pointer;
+      white-space: nowrap;
+    }
+
+    input[type="file"] { display: none; }
+
+    input:focus,
+    button:focus { outline: none; }
+
+    @media (max-width: 900px) {
+      .site {
+        width: 94vw;
+        padding: 12px 0 24px;
+      }
+
+      canvas { aspect-ratio: 4 / 5; }
+
+      .controls {
+        grid-template-columns: 1fr;
+        gap: 14px;
+      }
+
+      .text-input,
+      .file-label,
+      button {
+        width: 100%;
+        height: 74px;
+        border: 8px solid var(--red);
+        font-size: 25px;
+      }
+    }
+  </style>
+</head>
+
+<body>
+  <main class="site">
+
+    <header class="header">
+      <img src="header.png" alt="Confessions Generator">
+    </header>
+
+    <canvas id="canvas"></canvas>
+
+    <div class="controls">
+      <input
+        id="textInput"
+        class="text-input"
+        type="text"
+        value="CONFESSIONS GENERATOR"
+        placeholder="DIGITE SEU TEXTO"
+      />
+
+      <label class="file-label" for="mediaInput">ESCOLHER ARQUIVO</label>
+      <input id="mediaInput" type="file" accept="image/*,video/*" />
+
+      <button id="downloadBtn">BAIXAR</button>
+    </div>
+
+    <video id="video" muted loop playsinline style="display:none"></video>
+  </main>
+
+  <script>
+    const canvas = document.getElementById("canvas");
+    const ctx = canvas.getContext("2d");
+
+    const textInput = document.getElementById("textInput");
+    const mediaInput = document.getElementById("mediaInput");
+    const downloadBtn = document.getElementById("downloadBtn");
+    const video = document.getElementById("video");
+
+    const FONT_STACK = '"Arimo", Helvetica, Arial, sans-serif';
+
+    let uploadedMedia = null;
+    let mediaType = null;
+    let animationFrame = null;
+    let isRecording = false;
+
+    let mediaState = {
+      x: 0,
+      y: 0,
+      zoom: 1.12,
+      dragging: false,
+      lastX: 0,
+      lastY: 0
+    };
+
+    function isMobile() {
+      return window.innerWidth <= 900;
+    }
+
+    function setPreviewCanvasSize() {
+      if (isMobile()) {
+        canvas.width = 1080;
+        canvas.height = 1350;
+      } else {
+        canvas.width = 1600;
+        canvas.height = 900;
+      }
+    }
+
+    function lerp(a, b, t) {
+      return a + (b - a) * t;
+    }
+
+    function hexToRgb(hex) {
+      hex = hex.replace("#", "");
+      return {
+        r: parseInt(hex.substring(0, 2), 16),
+        g: parseInt(hex.substring(2, 4), 16),
+        b: parseInt(hex.substring(4, 6), 16)
+      };
+    }
+
+    function mixColors(color1, color2, t) {
+      return {
+        r: Math.round(lerp(color1.r, color2.r, t)),
+        g: Math.round(lerp(color1.g, color2.g, t)),
+        b: Math.round(lerp(color1.b, color2.b, t))
+      };
+    }
+
+    function drawGradient(targetCtx, w, h) {
+      const gradient = targetCtx.createLinearGradient(0, 0, w, h);
+      gradient.addColorStop(0, "#ff003c");
+      gradient.addColorStop(0.45, "#ff1493");
+      gradient.addColorStop(1, "#ff4dff");
+
+      targetCtx.fillStyle = gradient;
+      targetCtx.fillRect(0, 0, w, h);
+    }
+
+    function drawMediaCover(targetCtx, media, w, h) {
+      const mediaW = media.videoWidth || media.naturalWidth || media.width;
+      const mediaH = media.videoHeight || media.naturalHeight || media.height;
+
+      if (!mediaW || !mediaH) return;
+
+      const baseScale = Math.max(w / mediaW, h / mediaH);
+      const scale = baseScale * mediaState.zoom;
+
+      const newW = mediaW * scale;
+      const newH = mediaH * scale;
+
+      const x = (w - newW) / 2 + mediaState.x;
+      const y = (h - newH) / 2 + mediaState.y;
+
+      targetCtx.drawImage(media, x, y, newW, newH);
+    }
+
+    function createMediaLayer(media, w, h) {
+      const tempCanvas = document.createElement("canvas");
+      const tempCtx = tempCanvas.getContext("2d", { willReadFrequently: true });
+
+      tempCanvas.width = w;
+      tempCanvas.height = h;
+
+      drawMediaCover(tempCtx, media, w, h);
+
+      return tempCanvas;
+    }
+
+    function applyDuotone(sourceCanvas) {
+      const w = sourceCanvas.width;
+      const h = sourceCanvas.height;
+      const sourceCtx = sourceCanvas.getContext("2d", { willReadFrequently: true });
+      const imageData = sourceCtx.getImageData(0, 0, w, h);
+      const data = imageData.data;
+
+      const shadow = hexToRgb("#ff003c");
+      const mid = hexToRgb("#ff2fb3");
+      const highlight = hexToRgb("#ff7cff");
+
+      for (let i = 0; i < data.length; i += 4) {
+        let r = data[i];
+        let g = data[i + 1];
+        let b = data[i + 2];
+
+        let brightness = (0.299 * r + 0.587 * g + 0.114 * b) / 255;
+
+        brightness = Math.pow(brightness, 0.72);
+        brightness = (brightness - 0.08) * 1.35;
+        brightness = Math.max(0, Math.min(1, brightness));
+
+        let finalColor;
+
+        if (brightness < 0.5) {
+          finalColor = mixColors(shadow, mid, brightness / 0.5);
+        } else {
+          finalColor = mixColors(mid, highlight, (brightness - 0.5) / 0.5);
+        }
+
+        data[i] = finalColor.r;
+        data[i + 1] = finalColor.g;
+        data[i + 2] = finalColor.b;
+      }
+
+      sourceCtx.putImageData(imageData, 0, 0);
+      return sourceCanvas;
+    }
+
+    function addGradientOverlay(targetCtx, w, h) {
+      const gradient = targetCtx.createLinearGradient(0, 0, w, h);
+      gradient.addColorStop(0, "#ff003c");
+      gradient.addColorStop(0.45, "#ff1493");
+      gradient.addColorStop(1, "#ff4dff");
+
+      targetCtx.globalCompositeOperation = "soft-light";
+      targetCtx.globalAlpha = 0.55;
+      targetCtx.fillStyle = gradient;
+      targetCtx.fillRect(0, 0, w, h);
+
+      targetCtx.globalCompositeOperation = "screen";
+      targetCtx.globalAlpha = 0.18;
+      targetCtx.fillStyle = gradient;
+      targetCtx.fillRect(0, 0, w, h);
+
+      targetCtx.globalCompositeOperation = "source-over";
+      targetCtx.globalAlpha = 1;
+    }
+
+    function addGrain(targetCtx, w, h) {
+      const imageData = targetCtx.getImageData(0, 0, w, h);
+      const data = imageData.data;
+
+      for (let i = 0; i < data.length; i += 4) {
+        const noise = (Math.random() - 0.5) * 16;
+        data[i] = Math.max(0, Math.min(255, data[i] + noise));
+        data[i + 1] = Math.max(0, Math.min(255, data[i + 1] + noise));
+        data[i + 2] = Math.max(0, Math.min(255, data[i + 2] + noise));
+      }
+
+      targetCtx.putImageData(imageData, 0, 0);
+    }
+
+    function getLines(targetCtx, text, maxWidth, fontSize) {
+      targetCtx.font = `700 ${fontSize}px ${FONT_STACK}`;
+
+      const words = text.split(" ");
+      const lines = [];
+      let currentLine = "";
+
+      words.forEach(word => {
+        const testLine = currentLine ? currentLine + " " + word : word;
+
+        if (targetCtx.measureText(testLine).width > maxWidth && currentLine) {
+          lines.push(currentLine);
+          currentLine = word;
+        } else {
+          currentLine = testLine;
+        }
+      });
+
+      lines.push(currentLine);
+      return lines;
+    }
+
+    function fitText(targetCtx, text, w, h) {
+      const maxWidth = w * 0.86;
+      const maxHeight = h * 0.58;
+
+      let fontSize = w === 1080 ? 165 : 210;
+      let lines = [];
+
+      while (fontSize > 35) {
+        lines = getLines(targetCtx, text, maxWidth, fontSize);
+
+        const lineHeight = fontSize * 0.88;
+        const totalHeight = lines.length * lineHeight;
+
+        const longestLine = Math.max(...lines.map(line => targetCtx.measureText(line).width));
+
+        if (longestLine <= maxWidth && totalHeight <= maxHeight) break;
+
+        fontSize -= 2;
+      }
+
+      return { fontSize, lines };
+    }
+
+    function drawText(targetCtx, w, h) {
+      const text = (textInput.value || "CONFESSIONS").toUpperCase();
+
+      const { fontSize, lines } = fitText(targetCtx, text, w, h);
+      const lineHeight = fontSize * 0.88;
+      const totalHeight = lines.length * lineHeight;
+
+      targetCtx.save();
+      targetCtx.font = `700 ${fontSize}px ${FONT_STACK}`;
+      targetCtx.textAlign = "center";
+      targetCtx.textBaseline = "middle";
+      targetCtx.fillStyle = "#000";
+
+      let y = h / 2 - totalHeight / 2 + lineHeight / 2;
+
+      lines.forEach(line => {
+        targetCtx.fillText(line, w / 2, y);
+        y += lineHeight;
+      });
+
+      targetCtx.restore();
+    }
+
+    function render(targetCanvas, targetCtx, w, h, includeGrain = true) {
+      targetCanvas.width = w;
+      targetCanvas.height = h;
+
+      targetCtx.clearRect(0, 0, w, h);
+      drawGradient(targetCtx, w, h);
+
+      if (uploadedMedia) {
+        const mediaLayer = createMediaLayer(uploadedMedia, w, h);
+        const duotone = applyDuotone(mediaLayer);
+
+        targetCtx.drawImage(duotone, 0, 0);
+        addGradientOverlay(targetCtx, w, h);
+      }
+
+      if (includeGrain) addGrain(targetCtx, w, h);
+      drawText(targetCtx, w, h);
+    }
+
+    function drawPreview() {
+      setPreviewCanvasSize();
+      render(canvas, ctx, canvas.width, canvas.height);
+    }
+
+    function animateVideo() {
+      if (mediaType !== "video" || !uploadedMedia) return;
+
+      drawPreview();
+      animationFrame = requestAnimationFrame(animateVideo);
+    }
+
+    function stopAnimation() {
+      if (animationFrame) {
+        cancelAnimationFrame(animationFrame);
+        animationFrame = null;
+      }
+    }
+
+    function downloadImage() {
+      const exportCanvas = document.createElement("canvas");
+      const exportCtx = exportCanvas.getContext("2d", { willReadFrequently: true });
+
+      render(exportCanvas, exportCtx, 1080, 1350);
+
+      const link = document.createElement("a");
+      link.download = "confessions.png";
+      link.href = exportCanvas.toDataURL("image/png");
+      link.click();
+
+      drawPreview();
+    }
+
+    async function downloadVideo() {
+      if (isRecording) return;
+
+      const exportCanvas = document.createElement("canvas");
+      const exportCtx = exportCanvas.getContext("2d", { willReadFrequently: true });
+
+      exportCanvas.width = 1080;
+      exportCanvas.height = 1350;
+
+      const stream = exportCanvas.captureStream(30);
+
+      let mimeType = "video/webm;codecs=vp9";
+      if (!MediaRecorder.isTypeSupported(mimeType)) {
+        mimeType = "video/webm";
+      }
+
+      const recorder = new MediaRecorder(stream, { mimeType });
+      const chunks = [];
+
+      recorder.ondataavailable = function(event) {
+        if (event.data.size > 0) chunks.push(event.data);
+      };
+
+      recorder.onstop = function() {
+        const blob = new Blob(chunks, { type: "video/webm" });
+        const url = URL.createObjectURL(blob);
+
+        const link = document.createElement("a");
+        link.download = "confessions-video.webm";
+        link.href = url;
+        link.click();
+
+        URL.revokeObjectURL(url);
+        isRecording = false;
+        downloadBtn.textContent = "BAIXAR";
+      };
+
+      isRecording = true;
+      downloadBtn.textContent = "GRAVANDO...";
+
+      video.currentTime = 0;
+      await video.play();
+
+      recorder.start();
+
+      const duration = Math.min(video.duration || 8, 8);
+      const startTime = performance.now();
+
+      function recordFrame(now) {
+        const elapsed = (now - startTime) / 1000;
+
+        render(exportCanvas, exportCtx, 1080, 1350, false);
+
+        if (elapsed < duration) {
+          requestAnimationFrame(recordFrame);
+        } else {
+          recorder.stop();
+          video.play();
+        }
+      }
+
+      requestAnimationFrame(recordFrame);
+    }
+
+    function downloadCurrentMedia() {
+      if (mediaType === "video") {
+        downloadVideo();
+      } else {
+        downloadImage();
+      }
+    }
+
+    mediaInput.addEventListener("change", function(event) {
+      const file = event.target.files[0];
+      if (!file) return;
+
+      stopAnimation();
+
+      mediaState.x = 0;
+      mediaState.y = 0;
+      mediaState.zoom = 1.12;
+
+      if (file.type.startsWith("video/")) {
+        mediaType = "video";
+        video.src = URL.createObjectURL(file);
+
+        video.onloadeddata = async function() {
+          uploadedMedia = video;
+          await video.play();
+          drawPreview();
+          animateVideo();
+        };
+      } else {
+        mediaType = "image";
+
+        const img = new Image();
+        img.onload = function() {
+          uploadedMedia = img;
+          drawPreview();
+        };
+
+        img.src = URL.createObjectURL(file);
+      }
+    });
+
+    textInput.addEventListener("input", drawPreview);
+    downloadBtn.addEventListener("click", downloadCurrentMedia);
+
+    canvas.addEventListener("mousedown", function(event) {
+      mediaState.dragging = true;
+      mediaState.lastX = event.clientX;
+      mediaState.lastY = event.clientY;
+    });
+
+    window.addEventListener("mouseup", function() {
+      mediaState.dragging = false;
+    });
+
+    window.addEventListener("mousemove", function(event) {
+      if (!mediaState.dragging || !uploadedMedia) return;
+
+      mediaState.x += (event.clientX - mediaState.lastX) * 2;
+      mediaState.y += (event.clientY - mediaState.lastY) * 2;
+
+      mediaState.lastX = event.clientX;
+      mediaState.lastY = event.clientY;
+
+      drawPreview();
+    });
+
+    canvas.addEventListener("wheel", function(event) {
+      if (!uploadedMedia) return;
+
+      event.preventDefault();
+
+      const direction = event.deltaY > 0 ? -0.05 : 0.05;
+      mediaState.zoom = Math.max(1.02, Math.min(2.5, mediaState.zoom + direction));
+
+      drawPreview();
+    });
+
+    canvas.addEventListener("touchstart", function(event) {
+      if (!uploadedMedia) return;
+
+      mediaState.dragging = true;
+      mediaState.lastX = event.touches[0].clientX;
+      mediaState.lastY = event.touches[0].clientY;
+    });
+
+    canvas.addEventListener("touchmove", function(event) {
+      if (!mediaState.dragging || !uploadedMedia) return;
+
+      event.preventDefault();
+
+      mediaState.x += (event.touches[0].clientX - mediaState.lastX) * 2;
+      mediaState.y += (event.touches[0].clientY - mediaState.lastY) * 2;
+
+      mediaState.lastX = event.touches[0].clientX;
+      mediaState.lastY = event.touches[0].clientY;
+
+      drawPreview();
+    });
+
+    canvas.addEventListener("touchend", function() {
+      mediaState.dragging = false;
+    });
+
+    window.addEventListener("resize", drawPreview);
+
+    document.fonts.ready.then(drawPreview);
+    drawPreview();
+  </script>
+</body>
+</html>
